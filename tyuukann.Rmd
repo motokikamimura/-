@@ -1,0 +1,289 @@
+---
+title: "kimatu-no-coding"
+author: "上村基記"
+date: "2020/9/1"
+output: html_document
+---
+```{r }
+library(tidyverse)
+library(jsonlite)
+library(httr)
+library(sf)
+library(tmap)
+library(rvest)
+library(spdep)
+library(ggrepel)
+#API Endpoint
+urlBase <- "https://opendata.resas-portal.go.jp/"
+#項目識別用URI
+urlItem <- "api/v1/cities"
+#パラメータ設定
+urlParam <- "?prefCode=13"
+apiKey<-"ZIU3MHe6GjjtTbxR7ghZabiGhDbfKgHvGdNHPb93
+"
+#httrパッケージのGET()よりJSONデータを取得
+#add_headers()にAPIキーを追加する必要あり
+getJson <-
+  httr::GET(paste0(urlBase, urlItem, urlParam),
+            add_headers("X-API-KEY" = apiKey))
+
+#JSON形式のデータを見る場合は，content()コマンドを利用
+#取得データのリストデータの第3要素まで表示
+listGetJson <- httr::content(getJson)
+head(listGetJson$result, 3L)
+#リストをデータフレームに変換
+#今回のデータ構造は単純にデータを行方向にくっつける操作だけ可能
+#dplyr::bind_rows()を使うと簡単にデータフレームに変換できる
+#ただし複雑なデータには使えないので注意する．
+dfCityCode <- dplyr::bind_rows(listGetJson$result) 
+
+#データフレームを上書き修正
+#dplyr::mutate()で変数を修正
+#dplyr::select()で変数の順番も変更可能
+dfCityCode <- dfCityCode %>%
+  dplyr::mutate(prefName = "東京都") %>%
+  dplyr::mutate(cityCode = as.integer(cityCode)) %>%
+  dplyr::select(prefCode, prefName, everything())
+head(dfCityCode)
+#データフレームの保存
+#最初作っておけば，次回以降はわざわざRESAS-APIにアクセスしなくてよい
+#フォルダ作成：なければ新たに作成，既にあれば実行しない，
+strDirName <- "data"
+if (!dir.exists(strDirName)) {
+  dir.create(strDirName)
+}
+readr::write_csv(dfCityCode, "data/df_citycode.csv")
+#------------------------------------------------
+#東京都区市町村別新型コロナウイルスのデータフレーム作成
+#------------------------------------------------
+
+#東京都新型コロナウイルス感染症対策サイト
+urlCovid <- "https://raw.githubusercontent.com/tokyo-metropolitan-gov/covid19/development/data/patient.json"
+listTableCovid <- fromJSON(urlCovid)
+
+#リストの必要な要素をデータフレームとして格納
+#Rではリストの要素の場合，[[]]として記述する
+#通常の配列は[]となるので区別すること
+dfTemp <- listTableCovid$datasets$data
+
+#データ更新日を取得
+#ここは事前にブラウザからHTMLを解析して場所を特定する必要がある
+#データ取得日を整形
+strTemp <- lubridate::ymd(listTableCovid$datasets$date)
+strPublishedDate <- paste0(format(strTemp, "%Y年%m月%d日"), "時点")
+
+#データフレームを加工
+#変数名を日本語から英語へ
+#データ更新日を変数として追加（今回は日付データは文字列のまま）
+dfCovid <- dfTemp %>%
+  dplyr::filter(!is.na(code)) %>%
+  dplyr::rename(cityCode = code) %>%
+  dplyr::mutate(cityCode = floor(cityCode/10)) %>%
+  dplyr::rename(cityName = label) %>%
+  dplyr::rename(cumCovidPositive = count) %>%
+  dplyr::mutate(date = strPublishedDate) %>%
+  dplyr::select(date, cityCode, cityName, cumCovidPositive)
+
+#データフレームの保存
+#Web上のデータは更新で消えてしまうので保存しておく
+#フォルダ作成：なければ新たに作成，既にあれば実行しない，
+strDirName <- "data"
+if (!dir.exists(strDirName)) {
+  dir.create(strDirName)
+}
+readr::write_csv(dfCovid, 
+                 paste("data/df_covid19tokyo_", format(Sys.time(), "%Y%m%d"), ".csv"), 
+                 append = FALSE)
+#------------------------------------------------
+#東京都のシェープファイル取得
+#------------------------------------------------
+#チャンクオプションにeval=FALSEを追加
+#初めての時のみ実行すれば良い
+
+#ダウンロードフォルダ作成：なければ新たに作成，既にあれば実行しない，
+strDirName <- "data_estat"
+if (!dir.exists(strDirName)) {
+  dir.create(strDirName)
+}
+
+#e-Statからシェープファイルのダウンロード
+urlBase <- "https://www.e-stat.go.jp/gis/statmap-search/data"
+urlParam <- "?dlserveyId=A002005212015&code=13&coordSys=1&format=shape&downloadType=5"
+httr::GET(paste0(urlBase, urlParam), 
+          write_disk("data_estat/h27ka13.zip", overwrite = TRUE))
+
+#ZIPファイルを展開
+#data_estatフォルダのZIPファイルを，同一フォルダ内に展開する
+unzip("data_estat/h27ka13.zip", 
+      exdir = "data_estat", overwrite = TRUE)
+
+#ファイルがあるか確認
+dir("data_estat")
+#------------------------------------------------
+#東京都シェープファイルから最終データフレーム原型を作成
+#------------------------------------------------
+
+#シェープファイルを読み込む
+sf <- sf::read_sf("data_estat/h27ka13.shp")
+
+#一時作業用
+#不要なポリゴンを削除
+#dplyr::select()で必要な変数のみを残す
+#以下HCODEを用いた方法に修正（提出者の方が利用していたよりよい方法を採用）
+sfTemp <- sf %>%
+  dplyr::filter(Y_CODE > 35) %>%
+  dplyr::filter(HCODE != 8154) %>%
+  dplyr::mutate(cityCode = as.numeric(paste0(PREF, CITY))) %>%
+  dplyr::select(cityCode, JINKO)
+  
+#ポリゴンを区市町村単位に集計
+#第6回講義と中間課題Tipsの内容
+#sum関数を使って、国勢調査に基づく居住地人口を求める
+sfCity <- sfTemp %>%
+  stats::aggregate(by = list(sfTemp$cityCode), sum)
+
+#データフレームの変数名修正
+sfCity <- sfCity %>%
+  dplyr::mutate(cityCode = Group.1) %>%
+  dplyr::select(-Group.1)
+
+#最終データフレームの作成
+#市区町村コードをもとにデータフレームを結合
+#居住地人口10万人当たりの陽性患者数の変数を作成
+sfCity <- sfCity %>%
+  dplyr::left_join(dfCovid, by = "cityCode") %>%
+  dplyr::mutate(cumCovidPositivePerPop = cumCovidPositive / JINKO * 100000)
+head(sfCity)
+#sfデータフレームをGeoJson形式で保存
+#GMLだとCRSが正しく読み込めなくなる
+#フォルダ作成：なければ新たに作成，既にあれば実行しない，
+strDirName <- "data"
+if (!dir.exists(strDirName)) {
+  dir.create(strDirName)
+}
+sf::write_sf(sfCity, "data/sf_covid19tokyo.geojson", overwrite = TRUE)
+
+sf::write_sf(sfCity, "data/sf_covid19tokyo.geojson", overwrite = TRUE)
+## Warning in CPL_write_ogr(obj, dsn, layer, driver,
+## as.character(dataset_options), : GDAL Error 6: DeleteLayer() not supported by
+## this dataset.
+#------------------------------------------------
+#東京都の地図の可視化
+#------------------------------------------------
+#地図のデザインは採点外の項目なので，自由に調整可能
+#ここでは講義ビデオ内で紹介した方法で可視化
+
+#新型コロナウイルスの陽性患者数（累計）
+#tm_borders()を使って，区市町村境界のラインデータレイヤを追加
+```
+
+```{r vmap}
+tm_shape(sfCity) +
+  tm_fill(
+    "cumCovidPositive",
+    n = 8,
+    title = paste(
+      "Number of Positive Patients",
+      strPublishedDate,
+      sep = "\n"
+    )
+  ) +
+  tm_borders("black") +
+  tm_layout(fontfamily = "sans")
+  #居住者人口10万人当たりの新型コロナウイルスの陽性患者数（累計）
+#tm_borders()を使って，区市町村境界のラインデータレイヤを追加
+tm_shape(sfCity) +
+  tm_fill(
+    "cumCovidPositivePerPop",
+    n = 8,
+    title = paste(
+      "Number of Positive Patients",
+      "per 100,000 population",
+      strPublishedDate,
+      sep = "\n"
+    )
+  ) +
+  tm_borders("black") +
+  tm_layout(fontfamily = "sans")
+```
+```{r}
+#隣接空間重行列作成
+nbCont<- spdep::poly2nb(sfCity,queen=TRUE,snap=1e-4)
+#隣接空間による空間重み行列を作成（styleはwとしておく）
+swmCont<-spdep::nb2listw(nbCont,style = "W")
+#可視化-（地理空間ネットワーク）
+plot(sf::st_geometry(sfCity),border="grey")
+plot(nbCont,coordinates(as(sfCity,"Spatial")),add=TRUE,col="red")
+```
+
+
+```{r report_ols}
+#Moran'sIで陽性の患者数と陽性率を見る
+spdep::moran.test(sfCity$cumCovidPositive,swmCont)
+spdep::moran.test(sfCity$cumCovidPositivePerPop,swmCont)
+```
+```{r}
+#空間ラグ変数の作成＊標準化する
+sfCity<-sfCity %>%
+  dplyr::mutate(
+    wCumCovidPositive=spdep::lag.listw(swmCont,cumCovidPositive))%>%
+  dplyr::mutate(
+    wCumCovidPositivePercent=spdep::lag.listw(swmCont,cumCovidPositivePerPop))%>%
+  dplyr::mutate(
+    stdCumCovidPositive=scale(cumCovidPositive))%>%
+  dplyr::mutate(
+    stdCumCovidPositivePercent=scale(cumCovidPositivePerPop))%>%
+  dplyr::mutate(
+    wstdCumCovidPositive=spdep::lag.listw(swmCont,stdCumCovidPositive))%>%
+  dplyr::mutate(
+    wstdCumCovidPositivePercent=spdep::lag.listw(swmCont,stdCumCovidPositivePercent))
+```
+
+```{r}
+#これがようせいの患者の数
+list01s1<-lm(
+  wstdCumCovidPositive~-1+stdCumCovidPositive,data=sfCity
+)
+#これがようせいの患者率
+list01s2<-lm(
+  wstdCumCovidPositivePercent~-1+stdCumCovidPositivePercent,data=sfCity
+)
+```
+
+
+```{r scatterplot}
+#散布図(患者数)
+ggplot(sfCity,aes(x=stdCumCovidPositive,y=wstdCumCovidPositive,label=cityName))+
+  labs(x="新型コロナウィルの陽性患者数（累計）（標準化）",
+       y=paste("新型コロナウィルの陽性患者数（累計）","の空間ラグ（標準化）",sep="\n"),family="sans")+
+  xlim(-2.0,6)+
+  ylim(-2.0,3.5)+
+  geom_vline(xintercept = 0,color="red",linetype="dashed")+
+  geom_hline(yintercept = 0,color="red",linetype="dashed")+
+  geom_point(shape=21,color="navy",fill="white",size=2.5,stroke=2)+
+  geom_abline(slope = list01s1$coefficients,color="red",size=1.5)+
+  geom_text_repel(vjust=0,nudge_y = 0.8,size=3,family="sans")+
+  theme(text = element_text(size = 12,family = "sans"))+
+  geom_point()
+#陽性率
+ggplot(sfCity,aes(x=stdCumCovidPositivePercent,y=wstdCumCovidPositivePercent,label=cityName))+
+  labs(x=paste("居住者10万人あたりの新型コロナウィルの陽性患者数（累計）（標準化）",sep="/n"),
+       y="居住者10万人あたりの新型コロナウィルの陽性患者数（累計）","の空間ラグ（標準化）",sep="\n")+
+  xlim(-2.0,6)+
+  ylim(-2.0,3.5)+
+  geom_vline(xintercept = 0,color="red",linetype="dashed")+
+  geom_hline(yintercept = 0,color="red",linetype="dashed")+
+  geom_point(shape=21,color="navy",fill="white",size=2.5,stroke=2)+
+  geom_abline(slope = list01s2$coefficients,color="red",size=1.5)+
+  geom_text_repel(vjust=0,nudge_y = 0.8,size=3,family="sans")+
+  theme(text = element_text(size = 12,family = "sans"))+
+  geom_point()
+  
+
+  
+
+```
+
+
+```{r}
+```

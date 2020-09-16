@@ -1,0 +1,107 @@
+library(knitr)
+#library(ggplot2)
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_knit$set(root.dir= normalizePath('..'))
+knitr::opts_chunk$set(error = FALSE)
+#これがないとうまくいかなかいのでいれてます
+---
+
+  title: "応用計量分析1　期末課題　レポート"
+author: "上村基記"
+output: 
+  html_document:
+  toc: TRUE
+number_section: TRUE
+---
+  
+  ```{r include = FALSE}
+#ここも変更はできるが今回は必要なし
+knitr::opts_chunk$set(out.width = "100%", fig.align = "center")
+```
+
+<div hidden>
+  ```{r child = "tyuukann.Rmd", include = FALSE}
+#中間のものを流用したのでこうなりました。
+```
+</div>
+  
+  
+  # はじめに
+私の結論では中間課題で東京都では23区を中心として陽性の患者が多いと考えられた。  
+  新型コロナウィルスは人と人の接触によって引き起こされるため、三密を控えて生活することが求められている。また、人の生活圏は空間的制約を受けるため、感染は局所的になる。
+実際に居住者10万人あたりの陽性患者数を見ると、新宿区や港区千代田区中央区が多かったので、、このようなオフィス街を中⼼に感染 が集中していたとわかる。
+このことから、感染拡大過程では空間的自己相関を示していることが予測でき、逆に言えば空間的自己相関があることを示せれば、感染拡大において上記の要因が働いていることが示唆される。
+
+
+```{r, ref.label= "vmap", echo = FALSE}
+
+```
+
+
+# 分析方法
+
+①空間重み行列（W）と各地域の陽性患者数情報(ベクトルｘ)用いて空間ラグ変数(Wx)を作成。
+②ベクトルxとベクトルWxの相関関係の度合いを計測するためにMoran'sI統計、有意水準は５％。
+④可視化し散布図作成
+# データ及び変数
+
+データはそれぞれを
+
+市区町村コードと市町村名：https://opendata.resas-portal.go.jp/
+  東京都新型コロナウイルス感染症情報：https://stopcovid19.metro.tokyo.lg.jp/
+  https://www.e-stat.go.jp/gis/statmap-search/data
+東京都のシェープファイル：https://www.e-stat.go.jp/gis/statmap-search/data　
+
+から持ってきた。
+
+
+また、地図上の感染者可視化に至るまで、変数をそれぞれ
+
+dfCityCode：市町村リスト
+prefName：県名
+cityCode：シティーコード
+strDirName：https://stopcovid19.metro.tokyo.lg.jp/
+  https://www.e-stat.go.jp/gis/statmap-search/dataから取得した情報
+cumCovidPositive：累計感染者数
+cumCovidPositivePerpop：10万人あたりの感染者数
+dfCovid：地域別の感染者数
+sfCity：上記を統合したリスト　　　
+
+とした。ここまでは中間の内容の変数である。
+
+空間的自己相関の可視化からは変数を
+
+nbCont：k近傍法の隣接⾏列から作成した空間重み⾏
+swmCont：⾏列から作成した空間重み行列　
+wCumCovidPositive：swmとcumCovidPositiveの空間ラグ変数を計算
+wCumCovidPositivePerPop：swmとcumCovidPositivePerPopの空間ラグ変数を計算
+stdCumCovidPositive：wCumCovidPositiveを標準化
+stdCumCovidPositivePerPop：wCumCovidPositivePerPopを標準化
+wstdCumCovidPositive：swmとwCumCovidPositiveの空間ラグ変数を計算
+wstdCumCovidPositivePerPop：swmとwCumCovidPositivePerPopの空間ラグ変数を計算
+
+として追加設定した。
+
+# 分析結果・考察
+
+⼈⼝と⽐例して陽性患者数（累計）が増えるという関係が含まれていると考えられるので、居住者⼈⼝の規模を制御した「10万人当たりの累計陽性患者数」を観測すると、
+Moran'sI統計量(Moran I statistic)＝ 0.594097136,p値＝4.198e-16と十分に小さいので、有意水準５％より検定は有意と言える。
+Moran'sI統計量はやや強い正の値であるため、感染拡大過程では強い空間的自己相関を示していることが散布図からも明白である。
+
+
+```{r, ref.label= "report_ols", echo = FALSE}
+
+```
+
+```{r, ref.label= "scatterplot", echo = FALSE}
+
+```
+
+
+# 結論
+
+新型コロナウィルスは人から人の感染が一番大きい。住宅地が多い23区では地域ごとの感染拡大の差は少ない。オフィス街や繁華街のような人が集まるところより強い対策の必要あり。
+これより人が多いからではなく人の移動が多いから感染が多い。
+
+
+
